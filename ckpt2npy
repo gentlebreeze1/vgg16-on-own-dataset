@@ -1,0 +1,21 @@
+from tensorflow.python import pywrap_tensorflow
+import numpy as np
+import tensorflow as tf
+
+checkpoint_path='/Users/zhangyong/Desktop/tensorflow/1.0.0/Chapter05/5/MNIST_model'#your ckpt path
+ckpt = tf.train.get_checkpoint_state(checkpoint_path)
+reader = pywrap_tensorflow.NewCheckpointReader(ckpt.model_checkpoint_path)
+var_to_shape_map = reader.get_variable_to_shape_map()
+
+vgg16={}
+
+for key in var_to_shape_map:
+    print ("tensor_name",key)
+    sStr_2=key[:-2]
+    print sStr_2
+    if not vgg16.has_key(sStr_2):
+        vgg16[sStr_2]=[reader.get_tensor(key)]
+    else:
+        vgg16[sStr_2].append(reader.get_tensor(key))
+
+np.save('name.npy',vgg16)
