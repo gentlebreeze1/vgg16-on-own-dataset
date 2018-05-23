@@ -1,0 +1,88 @@
+def getDatafile():
+    images_path = []
+    labels = []
+    data_dir='/media/sys51/0002488400013A3B/students/yongzhang/vgg16-on-own-dataset-master/dataset/'
+    dirs = os.listdir(data_dir)
+    classes = [each for each in dirs]
+
+    for index,name in enumerate(classes):
+        
+        class_path=data_dir+name+'/'  
+        files=os.listdir(class_path)
+
+
+        for file in files:  
+            
+
+            images_path.append(class_path+file)
+            labels.append(index)
+
+    # images path list
+    
+    
+    # 先将图片路径和标签合并
+    temp = np.array([images_path, labels]).transpose()
+    # 提前随机打乱
+    np.random.shuffle(temp)
+
+    images_path_list = temp[:, 0]    # image path
+    labels_list = temp[:, 1]         # label
+    labels_list=[int(i) for i in labels_list]
+    
+   
+    # 返回图片路径列表和对应标签列表
+    return images_path_list,labels_list
+   def get_batch(image,label,batch_size):
+    image = tf.cast(image,tf.string)
+    label = tf.cast(label,tf.int64)
+    #tf.cast()用来做类型转换
+    input_queue = tf.train.slice_input_producer([image,label])
+    #加入队列
+    label = input_queue[1]
+    image_contents = tf.read_file(input_queue[0])
+    image = tf.image.decode_jpeg(image_contents,channels=3)
+    #jpeg或者jpg格式都用decode_jpeg函数，其他格式可以去查看官方文档
+    image = tf.image.resize_image_with_crop_or_pad(image,224,224)
+    #resize
+    image = tf.image.per_image_standardization(image)
+    #对resize后的图片进行标准化处理
+    image_batch,label_batch = tf.train.batch([image,label],batch_size = 10,num_threads=16,capacity = 10000)
+    label_batch = tf.reshape(label_batch,[batch_size])
+    return image_batch,label_batch
+    def run_training():
+    logs_train_dir = '3/'
+    img,labe=getDatafile()
+    train_batch,train_label_batch=get_batch(img,labe,10)                                                                                                                                                                                                    
+    train_logits =inference_op(train_batch)
+    train_loss = losses(train_logits,train_label_batch)
+    train_op = trainning(train_loss,0.001)
+    train_acc = evaluation(train_logits,train_label_batch)
+    summary_op = tf.summary.merge_all()
+    sess = tf.Session()
+    train_writer = tf.summary.FileWriter(logs_train_dir,sess.graph)
+        #saver主要用来保存和加载模型
+    saver = tf.train.Saver()
+    sess.run(tf.global_variables_initializer())
+    
+    coord = tf.train.Coordinator()
+    threads = tf.train.start_queue_runners(sess = sess,coord = coord)
+    try:
+        for step in np.arange(10000):
+            if coord.should_stop():
+                break
+            _,tra_loss,tra_acc = sess.run([train_op,train_loss,train_acc])
+                #每迭代50次，打印出一次结果
+            if step %  1000 == 0:
+                print('Step %d,train loss = %.2f,train occuracy = %.2f%%'%(step,tra_loss,tra_acc))
+                summary_str = sess.run(summary_op)
+                train_writer.add_summary(summary_str,step)
+            if step % 1000 ==0 or (step +1) == 10000:
+                checkpoint_path = os.path.join(logs_train_dir,'model.ckpt')
+                saver.save(sess,checkpoint_path,global_step = step)
+                    #每迭代200次，利用saver.save()保存一次模型文件，以便测试的时候使用
+    except tf.errors.OutOfRangeError:
+        print('Done training epoch limit reached')
+    finally:
+        coord.request_stop()
+    coord.join(threads)
+    sess.close()
