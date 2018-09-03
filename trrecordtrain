@@ -1,0 +1,171 @@
+##制作自己的TFRecord数据集
+
+import os 
+import tensorflow as tf
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
+
+cwd = "D://Anaconda3//spyder//Tensorflow_ReadData//data//"
+classes = {'cats', 'dogs'} #预先自己定义的类别
+writer = tf.python_io.TFRecordWriter('train.tfrecords') #输出成tfrecord文件
+
+def _int64_feature(value):
+    return tf.train.Feature(int64_list = tf.train.Int64List(value = [value]))
+
+def _bytes_feature(value):
+    return tf.train.Feature(bytes_list = tf.train.BytesList(value = [value]))
+
+for index, name in enumerate(classes):
+    class_path = cwd + name + '//'
+    for img_name in os.listdir(class_path):
+        img_path = class_path + img_name    #每个图片的地址
+
+        img = Image.open(img_path)
+        img = img.resize((208, 208))
+        img_raw = img.tobytes()  #将图片转化为二进制格式
+        example = tf.train.Example(features = tf.train.Features(feature = {
+                                                                           "label": _int64_feature(index),
+                                                                           "img_raw": _bytes_feature(img_raw),                                                                          
+                                                                           }))
+        writer.write(example.SerializeToString())  #序列化为字符串
+writer.close()
+
+
+import os 
+import tensorflow as tf
+from PIL import Image
+import matplotlib.pyplot as plt
+import numpy as np
+##读取batch大小的数据
+def read_and_decode(filename, batch_size): # read train.tfrecords
+    filename_queue = tf.train.string_input_producer([filename])# create a queue
+ 
+    reader = tf.TFRecordReader()
+    _, serialized_example = reader.read(filename_queue)#return file_name and file
+    features = tf.parse_single_example(serialized_example,
+                                       features={
+                                           'label': tf.FixedLenFeature([], tf.int64),
+                                           'img_raw' : tf.FixedLenFeature([], tf.string),
+                                       })#return image and label
+ 
+    img = tf.decode_raw(features['img_raw'], tf.uint8)
+    img = tf.reshape(img, [208, 208, 3])  #reshape image to 512*80*3
+#    img = tf.cast(img, tf.float32) * (1. / 255) - 0.5 #throw img tensor
+    label = tf.cast(features['label'], tf.int32) #throw label tensor
+ 
+    img_batch, label_batch = tf.train.shuffle_batch([img, label],
+                                                    batch_size= batch_size,
+                                                    num_threads=64,
+                                                    capacity=2000,
+                                                    min_after_dequeue=1500,
+                                                    )
+    return img_batch, tf.reshape(label_batch,[batch_size])
+    ##定义网络结构
+    
+    def train(input_tensor):
+    with tf.variable_scope('conv1'):
+        w1=tf.get_variable('weight',[5,5,3,32],initializer=tf.truncated_normal_initializer(stddev=0.1))
+        b1=tf.get_variable('biases',[32],initializer=tf.constant_initializer(0.0))
+        conv1=tf.nn.conv2d(input_tensor,w1,strides=[1,1,1,1],padding='SAME')
+        relu1=tf.nn.relu(tf.nn.bias_add(conv1,b1))
+    with tf.variable_scope('pool1'):
+        pool1=tf.nn.max_pool(relu1,ksize=[1,2,2,1],strides=[1,2,2,1],padding='SAME')
+    
+    shape=pool1.get_shape().as_list()
+    noods=shape[1]*shape[2]*shape[3]
+    reshape=tf.reshape(pool1,[shape[0],noods])
+    with tf.variable_scope('fc'):
+        fc_w=tf.get_variable('weight',[noods,2],initializer=tf.truncated_normal_initializer(stddev=0.1))
+        fc_b=tf.get_variable('biases',[2],initializer=tf.constant_initializer(0.1))
+        fc1=tf.matmul(reshape,fc_w)+fc_b
+    
+    return fc1##返回值不进行relu
+        定义损失函数等
+def loss(logits,label_batches):
+    cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits,labels=label_batches)
+    ##onehot编码与未进行onehot编码使用的交叉熵函数不同
+    cost = tf.reduce_mean(cross_entropy)
+    return cost
+def get_accuracy(logits,labels):
+    acc = tf.nn.in_top_k(logits,labels,1)###获取top k的正确
+    acc = tf.cast(acc,tf.float32)
+    acc = tf.reduce_mean(acc)
+    return acc
+def training(loss,lr):
+    train_op = tf.train.RMSPropOptimizer(lr,0.9).minimize(loss)
+    return train_op
+def main():
+    tf.reset_default_graph()##使用reset——default可以忽略variable——scope问题
+    tfrecords_file = 'train.tfrecords'
+    BATCH_SIZE = 4
+    image_batch, label_batch = read_and_decode(tfrecords_file, BATCH_SIZE)
+    x=tf.placeholder(tf.float32,[4,208,208,3])
+    y=tf.placeholder(tf.int32,[4])###未onehot编码否则[batch,output]
+    a=train(x)
+    cost=loss(a,y)
+    acc=get_accuracy(a,y)
+    train_op=training(cost,0.001)
+    logs_train_dir = '3/' 
+    
+    with tf.Session()  as sess:
+        
+        saver=tf.train.Saver()
+        writer=tf.summary.FileWriter('/media/room/hard/zhangyong/Faster-RCNN_TF/log')##tensorflowboard
+        writer.add_graph(sess.graph)
+        sess.run(tf.global_variables_initializer())
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(coord=coord)
+        try:
+            for step in np.arange(1000):
+                image, label = sess.run([image_batch, label_batch])###将batch数据传入占位符时要先run获得值
+                if coord.should_stop():
+                    break
+                _,train_acc,train_loss = sess.run([train_op,acc,cost],feed_dict={x:image,y:label})
+                if step % 100==0:
+                    print("loss:{} accuracy:{}".format(train_loss,train_acc))
+                    
+                
+                    checkpoint_path = os.path.join(logs_train_dir,'model.ckpt')
+                    saver.save(sess,checkpoint_path,global_step = step)
+        except tf.errors.OutOfRangeError:      
+            print("Done!!!")
+        finally:
+            coord.request_stop()
+        coord.join(threads)
+        
+        
+        ###测试数据集
+        def get_one_image(img_dir):
+    image = Image.open(img_dir)
+    plt.imshow(image)
+    image = image.resize([208, 208])
+    image_arr = np.array(image)
+    return image_arr
+    def test(test_file):
+    log_dir = '/media/room/hard/zhangyong/Faster-RCNN_TF/3'
+    image_arr = get_one_image(test_file)
+    
+    with tf.Graph().as_default():
+        image = tf.cast(image_arr, tf.float32)
+        image = tf.image.per_image_standardization(image)
+        image = tf.reshape(image, [1,208, 208, 3])
+        
+        p = train(image)
+        logits = tf.nn.softmax(p)
+        x = tf.placeholder(tf.float32,shape = [208,208,3])
+        saver = tf.train.Saver()
+        with tf.Session() as sess:
+            ckpt = tf.train.get_checkpoint_state(log_dir)
+            if ckpt and ckpt.model_checkpoint_path:
+                
+                saver.restore(sess, ckpt.model_checkpoint_path)
+                print('Loading success')
+            else:
+                print('No checkpoint')
+            prediction = sess.run(logits, feed_dict={x: image_arr})
+            max_index = np.argmax(prediction)
+            print(max_index)
+        
+    
+        
